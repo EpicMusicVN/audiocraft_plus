@@ -55,7 +55,7 @@ UNLOAD_MODEL = False
 MOVE_TO_CPU = False
 IS_BATCHED = "facebook/MusicGen" in os.environ.get('SPACE_ID', '')
 print(IS_BATCHED)
-MAX_BATCH_SIZE = 12
+MAX_BATCH_SIZE = 8
 BATCHED_DURATION = 15
 INTERRUPTING = False
 MBD = None
@@ -814,116 +814,131 @@ def calc_time(gen_type, s, duration, overlap, d0, d1, d2, d3, d4, d5, d6, d7, d8
     return calc[0], calc[1], calc[2], calc[3], calc[4], calc[5], calc[6], calc[7], calc[8], calc[9]
 
 
-def predict_full(gen_type, model, decoder, custom_model, prompt_amount, struc_prompt, bpm, key, scale, global_prompt, p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, audio, mode, trim_start, trim_end, duration, topk, topp, temperature, cfg_coef, seed, overlap, image, height, width, background, bar1, bar2, channel, sr_select, progress=gr.Progress()):
-    global INTERRUPTING
-    global USE_DIFFUSION
-    INTERRUPTING = False
+def predict_full(gen_types, models, decoders, custom_models, prompt_amounts, struc_prompts, bpms, keys, scales, global_prompts, p0s, p1s, p2s, p3s, p4s, p5s, p6s, p7s, p8s, p9s, d0s, d1s, d2s, d3s, d4s, d5s, d6s, d7s, d8s, d9s, audios, modes, trim_starts, trim_ends, durations, topks, topps, temperatures, cfg_coefs, seeds, overlaps, images, heights, widths, backgrounds, bar1s, bar2s, channels, sr_selects):
+    mp4_targets = []
+    wav_targets = []
+    outs_backups = []
+    downloads = []
+    seeds = []
+    
+    for gen_type, model, decoder, custom_model, prompt_amount, struc_prompt, bpm, key, scale, global_prompt, p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, audio, mode, trim_start, trim_end, duration, topk, topp, temperature, cfg_coef, seed, overlap, image, height, width, background, bar1, bar2, channel, sr_select in zip(gen_types, models, decoders, custom_models, prompt_amounts, struc_prompts, bpms, keys, scales, global_prompts, p0s, p1s, p2s, p3s, p4s, p5s, p6s, p7s, p8s, p9s, d0s, d1s, d2s, d3s, d4s, d5s, d6s, d7s, d8s, d9s, audios, modes, trim_starts, trim_ends, durations, topks, topps, temperatures, cfg_coefs, seeds, overlaps, images, heights, widths, backgrounds, bar1s, bar2s, channels, sr_selects):
+        global INTERRUPTING
+        global USE_DIFFUSION
+        INTERRUPTING = False
 
-    if gen_type == "audio":
-        custom_model = None
-        custom_model_shrt = "none"
-    elif gen_type == "music":
-        custom_model_shrt = custom_model
-        custom_model = "models/" + custom_model
+        progress = gr.Progress()
+        
+        if gen_type == "audio":
+            custom_model = None
+            custom_model_shrt = "none"
+        elif gen_type == "music":
+            custom_model_shrt = custom_model
+            custom_model = "models/" + custom_model
 
-    if temperature < 0:
-        raise gr.Error("Temperature must be >= 0.")
-    if topk < 0:
-        raise gr.Error("Topk must be non-negative.")
-    if topp < 0:
-        raise gr.Error("Topp must be non-negative.")
+        if temperature < 0:
+            raise gr.Error("Temperature must be >= 0.")
+        if topk < 0:
+            raise gr.Error("Topk must be non-negative.")
+        if topp < 0:
+            raise gr.Error("Topp must be non-negative.")
 
-    if trim_start < 0:
-        trim_start = 0
-    if trim_end < 0:
-        trim_end = 0
+        if trim_start < 0:
+            trim_start = 0
+        if trim_end < 0:
+            trim_end = 0
 
-    topk = int(topk)
+        topk = int(topk)
 
-    if decoder == "MultiBand_Diffusion":
-        USE_DIFFUSION = True
-        load_diffusion()
-    else:
-        USE_DIFFUSION = False
-        unload_diffusion()
+        if decoder == "MultiBand_Diffusion":
+            USE_DIFFUSION = True
+            load_diffusion()
+        else:
+            USE_DIFFUSION = False
+            unload_diffusion()
 
-    if gen_type == "music":
-        model_shrt = model
-        model = "GrandaddyShmax/musicgen-" + model
-    elif gen_type == "audio":
-        model_shrt = model
-        model = "GrandaddyShmax/audiogen-" + model
+        if gen_type == "music":
+            model_shrt = model
+            model = "GrandaddyShmax/musicgen-" + model
+        elif gen_type == "audio":
+            model_shrt = model
+            model = "GrandaddyShmax/audiogen-" + model
 
-    if MODEL is None or MODEL.name != (model):
-        load_model(model, custom_model, gen_type)
-    else:
-        if MOVE_TO_CPU:
-            MODEL.to('cuda')
+        if MODEL is None or MODEL.name != (model):
+            load_model(model, custom_model, gen_type)
+        else:
+            if MOVE_TO_CPU:
+                MODEL.to('cuda')
 
-    if seed < 0:
-        seed = random.randint(0, 0xffff_ffff_ffff)
-    torch.manual_seed(seed)
+        if seed < 0:
+            seed = random.randint(0, 0xffff_ffff_ffff)
+        torch.manual_seed(seed)
 
-    def _progress(generated, to_generate):
-        progress((min(generated, to_generate), to_generate))
-        if INTERRUPTING:
-            raise gr.Error("Interrupted.")
-    MODEL.set_custom_progress_callback(_progress)
+        def _progress(generated, to_generate):
+            progress((min(generated, to_generate), to_generate))
+            if INTERRUPTING:
+                raise gr.Error("Interrupted.")
+        MODEL.set_custom_progress_callback(_progress)
 
-    audio_mode = "none"
-    melody = None
-    sample = None
-    if audio:
-      audio_mode = mode
-      if mode == "sample":
-          sample = audio
-      elif mode == "melody":
-          melody = audio
+        audio_mode = "none"
+        melody = None
+        sample = None
+        if audio:
+          audio_mode = mode
+          if mode == "sample":
+              sample = audio
+          elif mode == "melody":
+              melody = audio
 
-    custom_model_shrt = "none" if model != "GrandaddyShmax/musicgen-custom" else custom_model_shrt
+        custom_model_shrt = "none" if model != "GrandaddyShmax/musicgen-custom" else custom_model_shrt
 
-    text_cat = [p0, p1, p2, p3, p4, p5, p6, p7, p8, p9]
-    drag_cat = [d0, d1, d2, d3, d4, d5, d6, d7, d8, d9]
-    texts = []
-    raw_texts = []
-    ind = 0
-    ind2 = 0
-    while ind < prompt_amount:
-        for ind2 in range(int(drag_cat[ind])):
-            if not struc_prompt:
-                texts.append(text_cat[ind])
-                global_prompt = "none"
-                bpm = "none"
-                key = "none"
-                scale = "none"
-                raw_texts.append(text_cat[ind])
-            else:
-                if gen_type == "music":
-                    bpm_str = str(bpm) + " bpm"
-                    key_str = ", " + str(key) + " " + str(scale)
-                    global_str = (", " + str(global_prompt)) if str(global_prompt) != "" else ""
-                elif gen_type == "audio":
-                    bpm_str = ""
-                    key_str = ""
-                    global_str = (str(global_prompt)) if str(global_prompt) != "" else ""
-                texts_str = (", " + str(text_cat[ind])) if str(text_cat[ind]) != "" else ""
-                texts.append(bpm_str + key_str + global_str + texts_str)
-                raw_texts.append(text_cat[ind])
+        text_cat = [p0, p1, p2, p3, p4, p5, p6, p7, p8, p9]
+        drag_cat = [d0, d1, d2, d3, d4, d5, d6, d7, d8, d9]
+        texts = []
+        raw_texts = []
+        ind = 0
         ind2 = 0
-        ind = ind + 1
+        while ind < prompt_amount:
+            for ind2 in range(int(drag_cat[ind])):
+                if not struc_prompt:
+                    texts.append(text_cat[ind])
+                    global_prompt = "none"
+                    bpm = "none"
+                    key = "none"
+                    scale = "none"
+                    raw_texts.append(text_cat[ind])
+                else:
+                    if gen_type == "music":
+                        bpm_str = str(bpm) + " bpm"
+                        key_str = ", " + str(key) + " " + str(scale)
+                        global_str = (", " + str(global_prompt)) if str(global_prompt) != "" else ""
+                    elif gen_type == "audio":
+                        bpm_str = ""
+                        key_str = ""
+                        global_str = (str(global_prompt)) if str(global_prompt) != "" else ""
+                    texts_str = (", " + str(text_cat[ind])) if str(text_cat[ind]) != "" else ""
+                    texts.append(bpm_str + key_str + global_str + texts_str)
+                    raw_texts.append(text_cat[ind])
+            ind2 = 0
+            ind = ind + 1
 
-    outs, outs_audio, outs_backup, input_length = _do_predictions(
-        gen_type, [texts], [melody], sample, trim_start, trim_end, duration, image, height, width, background, bar1, bar2, channel, sr_select, progress=True,
-        top_k=topk, top_p=topp, temperature=temperature, cfg_coef=cfg_coef, extend_stride=MODEL.max_duration-overlap)
-    tags = [str(global_prompt), str(bpm), str(key), str(scale), str(raw_texts), str(duration), str(overlap), str(seed), str(audio_mode), str(input_length), str(channel), str(sr_select), str(model_shrt), str(custom_model_shrt), str(decoder), str(topk), str(topp), str(temperature), str(cfg_coef), str(gen_type)]
-    wav_target, mp4_target, json_target = save_outputs(outs[0], outs_audio[0], tags, gen_type);
-    # Removes the temporary files.
-    for out in outs:
-        os.remove(out)
-    for out in outs_audio:
-        os.remove(out)
+        outs, outs_audio, outs_backup, input_length = _do_predictions(
+            gen_type, [texts], [melody], sample, trim_start, trim_end, duration, image, height, width, background, bar1, bar2, channel, sr_select, progress=True,
+            top_k=topk, top_p=topp, temperature=temperature, cfg_coef=cfg_coef, extend_stride=MODEL.max_duration-overlap)
+        tags = [str(global_prompt), str(bpm), str(key), str(scale), str(raw_texts), str(duration), str(overlap), str(seed), str(audio_mode), str(input_length), str(channel), str(sr_select), str(model_shrt), str(custom_model_shrt), str(decoder), str(topk), str(topp), str(temperature), str(cfg_coef), str(gen_type)]
+        wav_target, mp4_target, json_target = save_outputs(outs[0], outs_audio[0], tags, gen_type);
+        # Removes the temporary files.
+        for out in outs:
+            os.remove(out)
+        for out in outs_audio:
+            os.remove(out)
+    
+        mp4_targets.append(mp4_target)
+        wav_targets.append(wav_target)
+        outs_backups.append(outs_backup[0])
+        downloads.append([mp4_target, wav_target, json_target])
+        seeds.append(seed)
 
-    return mp4_target, wav_target, outs_backup[0], [mp4_target, wav_target, json_target], seed
+    return mp4_targets, wav_targets, outs_backups, downloads, seeds
 
 
 max_textboxes = 10
@@ -1657,7 +1672,7 @@ def ui_full(launch_kwargs):
         send_gen.click(info_to_params, inputs=[in_audio], outputs=[decoder, struc_prompts, global_prompt, bpm, key, scale, model, dropdown, s, prompts[0], prompts[1], prompts[2], prompts[3], prompts[4], prompts[5], prompts[6], prompts[7], prompts[8], prompts[9], repeats[0], repeats[1], repeats[2], repeats[3], repeats[4], repeats[5], repeats[6], repeats[7], repeats[8], repeats[9], mode, duration, topk, topp, temperature, cfg_coef, seed, overlap, channel, sr_select], queue=False)
         reuse_seed.click(fn=lambda x: x, inputs=[seed_used], outputs=[seed], queue=False)
         send_audio.click(fn=lambda x: x, inputs=[backup_only], outputs=[audio], queue=False)
-        submit.click(predict_full, inputs=[gen_type, model, decoder, dropdown, s, struc_prompts, bpm, key, scale, global_prompt, prompts[0], prompts[1], prompts[2], prompts[3], prompts[4], prompts[5], prompts[6], prompts[7], prompts[8], prompts[9], repeats[0], repeats[1], repeats[2], repeats[3], repeats[4], repeats[5], repeats[6], repeats[7], repeats[8], repeats[9], audio, mode, trim_start, trim_end, duration, topk, topp, temperature, cfg_coef, seed, overlap, image, height, width, background, bar1, bar2, channel, sr_select], outputs=[output, audio_only, backup_only, download, seed_used])
+        submit.click(predict_full, inputs=[gen_type, model, decoder, dropdown, s, struc_prompts, bpm, key, scale, global_prompt, prompts[0], prompts[1], prompts[2], prompts[3], prompts[4], prompts[5], prompts[6], prompts[7], prompts[8], prompts[9], repeats[0], repeats[1], repeats[2], repeats[3], repeats[4], repeats[5], repeats[6], repeats[7], repeats[8], repeats[9], audio, mode, trim_start, trim_end, duration, topk, topp, temperature, cfg_coef, seed, overlap, image, height, width, background, bar1, bar2, channel, sr_select], outputs=[output, audio_only, backup_only, download, seed_used], batch=True, max_batch_size=MAX_BATCH_SIZE)
         input_type.change(toggle_audio_src, input_type, [audio], queue=False, show_progress=False)
         to_calc.click(calc_time, inputs=[gen_type, s, duration, overlap, repeats[0], repeats[1], repeats[2], repeats[3], repeats[4], repeats[5], repeats[6], repeats[7], repeats[8], repeats[9]], outputs=[calcs[0], calcs[1], calcs[2], calcs[3], calcs[4], calcs[5], calcs[6], calcs[7], calcs[8], calcs[9]], queue=False)
 
