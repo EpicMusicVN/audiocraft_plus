@@ -48,7 +48,7 @@ if errorlevel 2 (
 ) else (
     echo Installing packages...
     "%VENV_DIR%\Scripts\pip" install torch torchaudio --extra-index-url https://download.pytorch.org/whl/cu118
-    "%VENV_DIR%\Scripts\pip" install -r "%~dp0%requirements.txt"
+    "%VENV_DIR%\Scripts\pip" install --no-cache-dir -r "%~dp0%requirements.txt"
     "%VENV_DIR%\Scripts\pip" install xformers
     goto :launch
 )
