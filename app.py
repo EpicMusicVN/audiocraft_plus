@@ -29,6 +29,8 @@ import torchaudio
 import gradio as gr
 import numpy as np
 import typing as tp
+import tkinter as tk
+from tkinter import filedialog
 
 from audiocraft.data.audio_utils import convert_audio
 from audiocraft.data.audio import audio_write
@@ -127,16 +129,17 @@ def load_model(version='facebook/musicgen-melody', custom_model=None, gen_type="
     print("Loading model ", version, " ", custom_model)
     if MODELS is None:
         if version == 'facebook/musicgen-custom':
-            custom_model_path = Path(".") / f"{custom_model}.pt"
-            if custom_model == "models/lofi":
-                MODEL = MusicGen.get_pretrained(name="facebook/musicgen-medium")
-                if not os.path.exists(custom_model_path):
-                    print("Downloading ", custom_model)
-                    with open(Path(".") / f"{custom_model}.index") as fin:
-                        url = fin.read()
-                        gdown.download(url, str(custom_model_path))
-                    os.remove(Path(".") / f"{custom_model}.index")
-            MODEL.lm.load_state_dict(torch.load(custom_model_path))
+            MODEL = MusicGen.get_pretrained(name="facebook/musicgen-medium")
+            # custom_model_path = Path(".") / f"{custom_model}.pt"
+            # if custom_model == "models/lofi":
+            #     MODEL = MusicGen.get_pretrained(name="facebook/musicgen-medium")
+            #     if not os.path.exists(custom_model_path):
+            #         print("Downloading ", custom_model)
+            #         with open(Path(".") / f"{custom_model}.index") as fin:
+            #             url = fin.read()
+            #             gdown.download(url, str(custom_model_path))
+            #         os.remove(Path(".") / f"{custom_model}.index")
+            # MODEL.lm.load_state_dict(torch.load(custom_model_path))
         else:
             if gen_type == "music":
                 MODEL = MusicGen.get_pretrained(version)
@@ -665,7 +668,7 @@ def add_tags(filename, tags):
     return json_file.name;
 
 
-def save_outputs(wav_tmp, tags, gen_type):
+def save_outputs(wav_tmp, tags, gen_type, output_path=""):
     # wav_tmp: temporary wav file located in %TEMP% folder
     # seed - used seed 
     # example - C:\Users\Alex\AppData\Local\Temp\tmp4ermrebs.wav,  195123182343465
@@ -676,8 +679,10 @@ def save_outputs(wav_tmp, tags, gen_type):
     # then we store generated wav into destination folders.     
 
     current_date = datetime.now().strftime("%Y%m%d")
-    wav_directory = os.path.join(os.getcwd(), 'output', current_date, gen_type,'wav')
-    json_directory = os.path.join(os.getcwd(), 'output', current_date, gen_type,'json')
+    output_directory = output_path if output_path != "" else os.path.join(os.getcwd(), 'output', current_date)
+
+    wav_directory = os.path.join(output_directory, gen_type,'wav')
+    json_directory = os.path.join(output_directory, gen_type,'json')
     os.makedirs(wav_directory, exist_ok=True)
     os.makedirs(json_directory, exist_ok=True)
 
@@ -785,10 +790,18 @@ def calc_time(gen_type, s, duration, overlap, d0, d1, d2, d3, d4, d5, d6, d7, d8
     return calc[0], calc[1], calc[2], calc[3], calc[4], calc[5], calc[6], calc[7], calc[8], calc[9]
 
 
-def predict_full(gen_type, model, decoder, custom_model, prompt_amount, struc_prompt, bpm, key, scale, global_prompt, p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, audio, mode, trim_start, trim_end, duration, topk, topp, temperature, cfg_coef, seed, overlap, channel, sr_select, progress=gr.Progress()):
+def predict_full(gen_type, model, decoder, custom_model, prompt_amount, struc_prompt, bpm, key, scale, global_prompt, p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, audio, mode, trim_start, trim_end, duration, topk, topp, temperature, cfg_coef, seed, overlap, channel, sr_select, output_path="", batch_count=1, progress=gr.Progress()):
     global INTERRUPTING
     global USE_DIFFUSION
     INTERRUPTING = False
+
+    print(f"MusicGen output path: {output_path}")
+    print(f"Batch count: {batch_count}")
+
+    wav_targets = []
+    outs_backups = []
+    downloads = []
+    seeds = []
 
     if gen_type == "audio":
         custom_model = None
@@ -831,68 +844,81 @@ def predict_full(gen_type, model, decoder, custom_model, prompt_amount, struc_pr
         if MOVE_TO_CPU:
             MODEL.to('cuda')
 
-    if seed < 0:
-        seed = random.randint(0, 0xffff_ffff_ffff)
-    torch.manual_seed(seed)
+    initial_seed = seed
 
-    def _progress(generated, to_generate):
-        progress((min(generated, to_generate), to_generate))
-        if INTERRUPTING:
-            raise gr.Error("Interrupted.")
-    MODEL.set_custom_progress_callback(_progress)
+    for batchIndex in range(int(batch_count)):
+        # Reset seed in case it was changed by the previous batch.
+        seed = initial_seed
+        if seed < 0:
+            seed = random.randint(0, 0xffff_ffff_ffff)
+        torch.manual_seed(seed)
 
-    audio_mode = "none"
-    melody = None
-    sample = None
-    if audio:
-      audio_mode = mode
-      if mode == "sample":
-          sample = audio
-      elif mode == "melody":
-          melody = audio
+        def _progress(generated, to_generate):
+            progress((min(generated, to_generate), to_generate))
+            if INTERRUPTING:
+                raise gr.Error("Interrupted.")
+        MODEL.set_custom_progress_callback(_progress)
 
-    custom_model_shrt = "none" if model != "facebook/musicgen-custom" else custom_model_shrt
+        audio_mode = "none"
+        melody = None
+        sample = None
+        if audio:
+            audio_mode = mode
+        if mode == "sample":
+            sample = audio
+        elif mode == "melody":
+            melody = audio
 
-    text_cat = [p0, p1, p2, p3, p4, p5, p6, p7, p8, p9]
-    drag_cat = [d0, d1, d2, d3, d4, d5, d6, d7, d8, d9]
-    texts = []
-    raw_texts = []
-    ind = 0
-    ind2 = 0
-    while ind < prompt_amount:
-        for ind2 in range(int(drag_cat[ind])):
-            if not struc_prompt:
-                texts.append(text_cat[ind])
-                global_prompt = "none"
-                bpm = "none"
-                key = "none"
-                scale = "none"
-                raw_texts.append(text_cat[ind])
-            else:
-                if gen_type == "music":
-                    bpm_str = str(bpm) + " bpm"
-                    key_str = ", " + str(key) + " " + str(scale)
-                    global_str = (", " + str(global_prompt)) if str(global_prompt) != "" else ""
-                elif gen_type == "audio":
-                    bpm_str = ""
-                    key_str = ""
-                    global_str = (str(global_prompt)) if str(global_prompt) != "" else ""
-                texts_str = (", " + str(text_cat[ind])) if str(text_cat[ind]) != "" else ""
-                texts.append(bpm_str + key_str + global_str + texts_str)
-                raw_texts.append(text_cat[ind])
+        custom_model_shrt = "none" if model != "facebook/musicgen-custom" else custom_model_shrt
+
+        text_cat = [p0, p1, p2, p3, p4, p5, p6, p7, p8, p9]
+        drag_cat = [d0, d1, d2, d3, d4, d5, d6, d7, d8, d9]
+        texts = []
+        raw_texts = []
+        ind = 0
         ind2 = 0
-        ind = ind + 1
+        while ind < prompt_amount:
+            for ind2 in range(int(drag_cat[ind])):
+                if not struc_prompt:
+                    texts.append(text_cat[ind])
+                    global_prompt = "none"
+                    bpm = "none"
+                    key = "none"
+                    scale = "none"
+                    raw_texts.append(text_cat[ind])
+                else:
+                    if gen_type == "music":
+                        bpm_str = str(bpm) + " bpm"
+                        key_str = ", " + str(key) + " " + str(scale)
+                        global_str = (", " + str(global_prompt)) if str(global_prompt) != "" else ""
+                    elif gen_type == "audio":
+                        bpm_str = ""
+                        key_str = ""
+                        global_str = (str(global_prompt)) if str(global_prompt) != "" else ""
+                    texts_str = (", " + str(text_cat[ind])) if str(text_cat[ind]) != "" else ""
+                    texts.append(bpm_str + key_str + global_str + texts_str)
+                    raw_texts.append(text_cat[ind])
+            ind2 = 0
+            ind = ind + 1
 
-    outs_audio, outs_backup, input_length = _do_predictions(
-        gen_type, [texts], [melody], sample, trim_start, trim_end, duration, channel, sr_select, progress=True,
-        top_k=topk, top_p=topp, temperature=temperature, cfg_coef=cfg_coef, extend_stride=MODEL.max_duration-overlap)
-    tags = [str(global_prompt), str(bpm), str(key), str(scale), str(raw_texts), str(duration), str(overlap), str(seed), str(audio_mode), str(input_length), str(channel), str(sr_select), str(model_shrt), str(custom_model_shrt), str(decoder), str(topk), str(topp), str(temperature), str(cfg_coef), str(gen_type)]
-    wav_target, json_target = save_outputs(outs_audio[0], tags, gen_type)
-    # Removes the temporary files.
-    for out in outs_audio:
-        os.remove(out)
+        outs_audio, outs_backup, input_length = _do_predictions(
+            gen_type, [texts], [melody], sample, trim_start, trim_end, duration, channel, sr_select, progress=True,
+            top_k=topk, top_p=topp, temperature=temperature, cfg_coef=cfg_coef, extend_stride=MODEL.max_duration-overlap)
+        tags = [str(global_prompt), str(bpm), str(key), str(scale), str(raw_texts), str(duration), str(overlap), str(seed), str(audio_mode), str(input_length), str(channel), str(sr_select), str(model_shrt), str(custom_model_shrt), str(decoder), str(topk), str(topp), str(temperature), str(cfg_coef), str(gen_type)]
+        wav_target, json_target = save_outputs(outs_audio[0], tags, gen_type, output_path)
+        # Removes the temporary files.
+        for out in outs_audio:
+            os.remove(out)
 
-    return wav_target, outs_backup[0], [wav_target, json_target], seed
+        wav_targets.append(wav_target)
+        outs_backups.append(outs_backup[0])
+        seeds.append(seed)
+        downloads.append(wav_target)
+        downloads.append(json_target)
+
+    if batch_count == 1:
+        return wav_targets[0], outs_backups[0], downloads, None, seeds[0]
+    return None, None, None, downloads, None
 
 
 max_textboxes = 10
@@ -915,6 +941,26 @@ def toggle_audio_src(choice):
     else:
         return gr.update(source="upload", value=None, label="File")
 
+
+def toggle_gen_mode(choice):
+    if choice == "Batch":
+        return gr.Number(visible=True, value=2, label="Batch Count", minimum=2, interactive=True, scale=1), gr.Column(visible=False), gr.Column(visible=True)
+    else:
+        return gr.Number(visible=False, value=2, label="Batch Count", minimum=2, interactive=True, scale=1), gr.Column(visible=True), gr.Column(visible=False)
+
+
+def select_directory():
+    root = tk.Tk()
+    root.attributes("-topmost", True)
+    root.withdraw()
+    filename = filedialog.askdirectory()
+    if filename:
+        if os.path.isdir(filename):
+            root.destroy()
+            return str(filename)
+    filename = "Folder not seleceted"
+    root.destroy()
+    return str(filename)
 
 def ui_full(launch_kwargs):
     with gr.Blocks(title='AudioCraft Plus', theme=theme) as interface:
@@ -975,6 +1021,12 @@ def ui_full(launch_kwargs):
                         with gr.Row():
                             overlap = gr.Slider(minimum=1, maximum=29, value=12, step=1, label="Overlap", interactive=True)
                         with gr.Row():
+                            gen_mode = gr.Radio(["Single", "Batch"], label="Generation mode", value="Single", interactive=True)
+                            batch_count = gr.Number(label="Batch Count", minimum=2, value=2, scale=1, interactive=True, visible=False)
+                        with gr.Row():
+                            output_path = gr.Textbox(label="Output Directory", scale=5, interactive=False)
+                            output_dir_browse_btn = gr.Button("Browse", min_width=1)
+                        with gr.Row():
                             seed = gr.Number(label="Seed", value=-1, scale=4, precision=0, interactive=True)
                             gr.Button('\U0001f3b2\ufe0f', scale=1).click(fn=lambda: -1, outputs=[seed], queue=False)
                             reuse_seed = gr.Button('\u267b\ufe0f', scale=1)
@@ -1012,12 +1064,15 @@ def ui_full(launch_kwargs):
                         _ = gr.Button("Interrupt").click(fn=interrupt, queue=False)
                 with gr.Column() as c:
                     with gr.Tab("Output"):
-                        with gr.Row():
-                            audio_only = gr.Audio(type="numpy", label="Audio Only", interactive=False)
-                            backup_only = gr.Audio(type="numpy", label="Backup Audio", interactive=False, visible=False)
-                            send_audio = gr.Button("Send to Input Audio")
-                        seed_used = gr.Number(label='Seed used', value=-1, interactive=False)
-                        download = gr.File(label="Generated Files", interactive=False)
+                        with gr.Column() as output:
+                            with gr.Row():
+                                audio_only = gr.Audio(type="numpy", label="Audio Only", interactive=False, visible=True)
+                                backup_only = gr.Audio(type="numpy", label="Backup Audio", interactive=False, visible=False)
+                                send_audio = gr.Button("Send to Input Audio", visible=True)
+                            seed_used = gr.Number(label='Seed used', value=-1, interactive=False, visible=True)
+                            download = gr.File(label="Generated Files", interactive=False, visible=True)
+                        with gr.Column(visible=False) as output_batch:
+                            download_batch = gr.File(label="Generated Files", interactive=False, visible=True)
                     with gr.Tab("Wiki"):
                         gr.Markdown(
                             """
@@ -1552,9 +1607,41 @@ def ui_full(launch_kwargs):
         send_gen.click(info_to_params, inputs=[in_audio], outputs=[decoder, struc_prompts, global_prompt, bpm, key, scale, model, dropdown, s, prompts[0], prompts[1], prompts[2], prompts[3], prompts[4], prompts[5], prompts[6], prompts[7], prompts[8], prompts[9], repeats[0], repeats[1], repeats[2], repeats[3], repeats[4], repeats[5], repeats[6], repeats[7], repeats[8], repeats[9], mode, duration, topk, topp, temperature, cfg_coef, seed, overlap, channel, sr_select], queue=False)
         reuse_seed.click(fn=lambda x: x, inputs=[seed_used], outputs=[seed], queue=False)
         send_audio.click(fn=lambda x: x, inputs=[backup_only], outputs=[audio], queue=False)
-        submit.click(predict_full, inputs=[gen_type, model, decoder, dropdown, s, struc_prompts, bpm, key, scale, global_prompt, prompts[0], prompts[1], prompts[2], prompts[3], prompts[4], prompts[5], prompts[6], prompts[7], prompts[8], prompts[9], repeats[0], repeats[1], repeats[2], repeats[3], repeats[4], repeats[5], repeats[6], repeats[7], repeats[8], repeats[9], audio, mode, trim_start, trim_end, duration, topk, topp, temperature, cfg_coef, seed, overlap, channel, sr_select], outputs=[audio_only, backup_only, download, seed_used])
+        submit.click(
+            predict_full,
+            inputs=[
+                gen_type,
+                model,
+                decoder,
+                dropdown,
+                s,
+                struc_prompts,
+                bpm,
+                key,
+                scale,
+                global_prompt,
+                prompts[0], prompts[1], prompts[2], prompts[3], prompts[4], prompts[5], prompts[6], prompts[7], prompts[8], prompts[9],
+                repeats[0], repeats[1], repeats[2], repeats[3], repeats[4], repeats[5], repeats[6], repeats[7], repeats[8], repeats[9],
+                audio,
+                mode,
+                trim_start, trim_end,
+                duration,
+                topk, topp,
+                temperature,
+                cfg_coef,
+                seed,
+                overlap,
+                channel,
+                sr_select,
+                output_path,
+                batch_count
+            ],
+            outputs=[audio_only, backup_only, download, download_batch, seed_used]
+        )
         input_type.change(toggle_audio_src, input_type, [audio], queue=False, show_progress=False)
         to_calc.click(calc_time, inputs=[gen_type, s, duration, overlap, repeats[0], repeats[1], repeats[2], repeats[3], repeats[4], repeats[5], repeats[6], repeats[7], repeats[8], repeats[9]], outputs=[calcs[0], calcs[1], calcs[2], calcs[3], calcs[4], calcs[5], calcs[6], calcs[7], calcs[8], calcs[9]], queue=False)
+        gen_mode.change(toggle_gen_mode, inputs=gen_mode, outputs=[batch_count, output, output_batch])
+        output_dir_browse_btn.click(select_directory, outputs=output_path, show_progress="hidden")
 
         send_gen_a.click(info_to_params_a, inputs=[in_audio], outputs=[decoder_a, struc_prompts_a, global_prompt_a, s_a, prompts_a[0], prompts_a[1], prompts_a[2], prompts_a[3], prompts_a[4], prompts_a[5], prompts_a[6], prompts_a[7], prompts_a[8], prompts_a[9], repeats_a[0], repeats_a[1], repeats_a[2], repeats_a[3], repeats_a[4], repeats_a[5], repeats_a[6], repeats_a[7], repeats_a[8], repeats_a[9], duration_a, topk_a, topp_a, temperature_a, cfg_coef_a, seed_a, overlap_a, channel_a, sr_select_a], queue=False)
         reuse_seed_a.click(fn=lambda x: x, inputs=[seed_used_a], outputs=[seed_a], queue=False)
