@@ -668,7 +668,7 @@ def add_tags(filename, tags):
     return json_file.name;
 
 
-def save_outputs(wav_tmp, tags, gen_type, output_path=""):
+def save_outputs(wav_tmp, tags, gen_type, output_path="", model=""):
     # wav_tmp: temporary wav file located in %TEMP% folder
     # seed - used seed 
     # example - C:\Users\Alex\AppData\Local\Temp\tmp4ermrebs.wav,  195123182343465
@@ -679,10 +679,10 @@ def save_outputs(wav_tmp, tags, gen_type, output_path=""):
     # then we store generated wav into destination folders.     
 
     current_date = datetime.now().strftime("%Y%m%d")
-    output_directory = output_path if output_path != "" else os.path.join(os.getcwd(), 'output', current_date)
+    output_directory = output_path if output_path != "" else os.path.join(os.getcwd(), 'output')
 
-    wav_directory = os.path.join(output_directory, gen_type,'wav')
-    json_directory = os.path.join(output_directory, gen_type,'json')
+    wav_directory = os.path.join(output_directory, current_date, model, gen_type)
+    json_directory = os.path.join(output_directory, current_date, model, gen_type)
     os.makedirs(wav_directory, exist_ok=True)
     os.makedirs(json_directory, exist_ok=True)
 
@@ -708,7 +708,7 @@ def save_outputs(wav_tmp, tags, gen_type, output_path=""):
     
     os.remove(json_file)
 
-    return wav_target, json_target
+    return wav_target, json_target, wav_directory
 
 
 def clear_cash():
@@ -794,9 +794,11 @@ def predict_full(gen_type, model, decoder, custom_model, prompt_amount, struc_pr
     global INTERRUPTING
     global USE_DIFFUSION
     INTERRUPTING = False
-
+    start_time = time.time()
     print(f"MusicGen output path: {output_path}")
     print(f"Batch count: {batch_count}")
+    print(f"Model: {model}")
+    print(f"Custom model: {custom_model}")
 
     wav_targets = []
     outs_backups = []
@@ -845,6 +847,7 @@ def predict_full(gen_type, model, decoder, custom_model, prompt_amount, struc_pr
             MODEL.to('cuda')
 
     initial_seed = seed
+    destination_folder = ""
 
     for batchIndex in range(int(batch_count)):
         # Reset seed in case it was changed by the previous batch.
@@ -905,7 +908,13 @@ def predict_full(gen_type, model, decoder, custom_model, prompt_amount, struc_pr
             gen_type, [texts], [melody], sample, trim_start, trim_end, duration, channel, sr_select, progress=True,
             top_k=topk, top_p=topp, temperature=temperature, cfg_coef=cfg_coef, extend_stride=MODEL.max_duration-overlap)
         tags = [str(global_prompt), str(bpm), str(key), str(scale), str(raw_texts), str(duration), str(overlap), str(seed), str(audio_mode), str(input_length), str(channel), str(sr_select), str(model_shrt), str(custom_model_shrt), str(decoder), str(topk), str(topp), str(temperature), str(cfg_coef), str(gen_type)]
-        wav_target, json_target = save_outputs(outs_audio[0], tags, gen_type, output_path)
+        wav_target, json_target, destination = save_outputs(
+            outs_audio[0],
+            tags,
+            gen_type,
+            output_path,
+            custom_model.split('/')[-1]
+        )
         # Removes the temporary files.
         for out in outs_audio:
             os.remove(out)
@@ -915,10 +924,16 @@ def predict_full(gen_type, model, decoder, custom_model, prompt_amount, struc_pr
         seeds.append(seed)
         downloads.append(wav_target)
         downloads.append(json_target)
+        destination_folder = destination
+
+    end_time = time.time()
+    runtime = end_time - start_time
+    formatted_runtime = f"{runtime:.3f}s"
+    message = f"Generation complete. Total batch count {batch_count}. Runtime: {formatted_runtime}"
 
     if batch_count == 1:
-        return wav_targets[0], outs_backups[0], downloads, None, seeds[0]
-    return None, None, None, downloads, None
+        return wav_targets[0], outs_backups[0], downloads, seeds[0], None, None
+    return None, None, None, None, destination_folder, message
 
 
 max_textboxes = 10
@@ -1024,7 +1039,7 @@ def ui_full(launch_kwargs):
                             gen_mode = gr.Radio(["Single", "Batch"], label="Generation mode", value="Single", interactive=True)
                             batch_count = gr.Number(label="Batch Count", minimum=2, value=2, scale=1, interactive=True, visible=False)
                         with gr.Row():
-                            output_path = gr.Textbox(label="Output Directory", scale=5, interactive=False)
+                            output_path = gr.Textbox(label="Output Directory", value=str(os.path.join(os.getcwd(), "output")), scale=5, interactive=False)
                             output_dir_browse_btn = gr.Button("Browse", min_width=1)
                         with gr.Row():
                             seed = gr.Number(label="Seed", value=-1, scale=4, precision=0, interactive=True)
@@ -1072,7 +1087,8 @@ def ui_full(launch_kwargs):
                             seed_used = gr.Number(label='Seed used', value=-1, interactive=False, visible=True)
                             download = gr.File(label="Generated Files", interactive=False, visible=True)
                         with gr.Column(visible=False) as output_batch:
-                            download_batch = gr.File(label="Generated Files", interactive=False, visible=True)
+                            destination_folder = gr.Textbox(label="Destination Folder", value="", scale=5, interactive=False)
+                            batch_message = gr.Text(label="Batch Message", value="Hello world", scale=5, interactive=False)
                     with gr.Tab("Wiki"):
                         gr.Markdown(
                             """
@@ -1636,7 +1652,14 @@ def ui_full(launch_kwargs):
                 output_path,
                 batch_count
             ],
-            outputs=[audio_only, backup_only, download, download_batch, seed_used]
+            outputs=[
+                audio_only,
+                backup_only,
+                download,
+                seed_used,
+                destination_folder,
+                batch_message
+            ]
         )
         input_type.change(toggle_audio_src, input_type, [audio], queue=False, show_progress=False)
         to_calc.click(calc_time, inputs=[gen_type, s, duration, overlap, repeats[0], repeats[1], repeats[2], repeats[3], repeats[4], repeats[5], repeats[6], repeats[7], repeats[8], repeats[9]], outputs=[calcs[0], calcs[1], calcs[2], calcs[3], calcs[4], calcs[5], calcs[6], calcs[7], calcs[8], calcs[9]], queue=False)
