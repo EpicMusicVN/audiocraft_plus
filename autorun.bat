@@ -47,9 +47,9 @@ if errorlevel 2 (
     goto :launch
 ) else (
     echo Installing packages...
-    "%VENV_DIR%\Scripts\pip" install torch torchaudio --extra-index-url https://download.pytorch.org/whl/cu118
-    "%VENV_DIR%\Scripts\pip" install --no-cache-dir -r "%~dp0%requirements.txt"
-    "%VENV_DIR%\Scripts\pip" install xformers
+    "%VENV_DIR%\Scripts\pip" install -r "%~dp0%requirements.txt"
+    "%VENV_DIR%\Scripts\pip" uninstall torch torchaudio
+    "%VENV_DIR%\Scripts\pip" install torch==2.0.1 torchaudio --extra-index-url https://download.pytorch.org/whl/cu118 --no-cache-dir
     goto :launch
 )
 

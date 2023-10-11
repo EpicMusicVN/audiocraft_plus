@@ -61,3 +61,6 @@ dataset/*
 /local_scripts
 /notes
 /cache
+
+output
+client_secret.json

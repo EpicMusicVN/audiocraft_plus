@@ -40,6 +40,8 @@ import random, string
 
 import gdown
 
+from utils import download_file
+
 version = "2.0.1"
 
 theme = gr.themes.Base(
@@ -130,16 +132,19 @@ def load_model(version='facebook/musicgen-melody', custom_model=None, gen_type="
     if MODELS is None:
         if version == 'facebook/musicgen-custom':
             MODEL = MusicGen.get_pretrained(name="facebook/musicgen-medium")
-            # custom_model_path = Path(".") / f"{custom_model}.pt"
-            # if custom_model == "models/lofi":
-            #     MODEL = MusicGen.get_pretrained(name="facebook/musicgen-medium")
-            #     if not os.path.exists(custom_model_path):
-            #         print("Downloading ", custom_model)
-            #         with open(Path(".") / f"{custom_model}.index") as fin:
-            #             url = fin.read()
-            #             gdown.download(url, str(custom_model_path))
-            #         os.remove(Path(".") / f"{custom_model}.index")
-            # MODEL.lm.load_state_dict(torch.load(custom_model_path))
+            custom_model_path = Path(".") / f"{custom_model}.pt"
+            if not os.path.exists(custom_model_path):
+                print("Downloading ", custom_model)
+                with open(Path(".") / f"{custom_model}.index") as fin:
+                    url = fin.read()
+                    download_file(url, str(custom_model_path))
+                os.remove(Path(".") / f"{custom_model}.index")
+            time.sleep(1)
+            if os.path.exists(custom_model_path):
+                print("Loading custom model ", custom_model)
+                MODEL.lm.load_state_dict(torch.load(custom_model_path))
+            else:
+                print("Custom model not found, using default model...")
         else:
             if gen_type == "music":
                 MODEL = MusicGen.get_pretrained(version)
@@ -790,6 +795,16 @@ def calc_time(gen_type, s, duration, overlap, d0, d1, d2, d3, d4, d5, d6, d7, d8
     return calc[0], calc[1], calc[2], calc[3], calc[4], calc[5], calc[6], calc[7], calc[8], calc[9]
 
 
+def log_to_file(message, file_path):
+    # write message to file
+    # message - message to write
+    # file_path - path to file
+    with open(file_path, 'a+') as f:
+        f.write("-" * 80)
+        f.write(message)
+        f.write("-" * 80)
+
+
 def predict_full(gen_type, model, decoder, custom_model, prompt_amount, struc_prompt, bpm, key, scale, global_prompt, p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, audio, mode, trim_start, trim_end, duration, topk, topp, temperature, cfg_coef, seed, overlap, channel, sr_select, output_path="", batch_count=1, progress=gr.Progress()):
     global INTERRUPTING
     global USE_DIFFUSION
@@ -929,7 +944,24 @@ def predict_full(gen_type, model, decoder, custom_model, prompt_amount, struc_pr
     end_time = time.time()
     runtime = end_time - start_time
     formatted_runtime = f"{runtime:.3f}s"
-    message = f"Generation complete. Total batch count {batch_count}. Runtime: {formatted_runtime}"
+    message = f"Generation complete.\nTotal batch count {batch_count}.\nRuntime: {formatted_runtime}"
+
+    # Write log to file
+    current_date = datetime.now().strftime("%Y%m%d")
+    formatted_datetime = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    log_dir =  os.path.join(output_path, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_message = f"""
+        {formatted_datetime}
+        Model: {custom_model.split('/')[-1]}
+        Prompt: {texts}
+        Gentype: {gen_type}
+        Key: {key}, Scale: {scale}, BPM: {bpm}
+        Duration: {duration}, Overlap: {overlap}
+        Total batch count {batch_count}
+        Runtime: {formatted_runtime}
+    """
+    log_to_file(log_message, os.path.join(log_dir, f"{current_date}.txt"))
 
     if batch_count == 1:
         return wav_targets[0], outs_backups[0], downloads, seeds[0], None, None
@@ -976,6 +1008,7 @@ def select_directory():
     filename = "Folder not seleceted"
     root.destroy()
     return str(filename)
+
 
 def ui_full(launch_kwargs):
     with gr.Blocks(title='AudioCraft Plus', theme=theme) as interface:
@@ -1088,7 +1121,7 @@ def ui_full(launch_kwargs):
                             download = gr.File(label="Generated Files", interactive=False, visible=True)
                         with gr.Column(visible=False) as output_batch:
                             destination_folder = gr.Textbox(label="Destination Folder", value="", scale=5, interactive=False)
-                            batch_message = gr.Text(label="Batch Message", value="Hello world", scale=5, interactive=False)
+                            batch_message = gr.Text(label="Batch Message", value="Waiting for generation...", scale=5, interactive=False)
                     with gr.Tab("Wiki"):
                         gr.Markdown(
                             """

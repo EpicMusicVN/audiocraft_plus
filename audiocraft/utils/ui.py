@@ -25,7 +25,8 @@ def create_refresh_button(refresh_component, refresh_method, refreshed_args, ele
 
         return gr.update(**(args or {}))
 
-    refresh_button = ToolButton(value=refresh_symbol, elem_classes=elem_class, scale=1, size="sm", container=False)
+    # refresh_button = ToolButton(value=refresh_symbol, elem_classes=elem_class, scale=1, size="sm", container=False)
+    refresh_button = gr.Button("Refresh", variant="secondary", elem_classes=elem_class)
     refresh_button.click(
         fn=refresh,
         inputs=[],
